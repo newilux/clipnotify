@@ -4,15 +4,10 @@ using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.IO;
 
-// ClipNotify（剪贴提示）—— 剪贴板变化提示工具
+// ClipNotify —— 剪贴板变化提示工具（v4）
 // 检测到剪贴板内容变化时，按设置弹出浮窗提示和/或发出提示音。
-// 特性：
-//   - 右键菜单：提示音 / 浮窗提示 / 精确模式（仅Ctrl+C时提示）三个独立开关
-//   - 精确模式：通过低级键盘钩子区分"真实按键"与"应用模拟注入的按键"，
-//     过滤微信/豆包划词等"选中即复制"（模拟 Ctrl+C）造成的误报
-//   - 自绘右下角浮窗：立即刷新内容、1.4 秒自动消失，快速连续复制不积压
-//   - 设置持久化到 %LOCALAPPDATA%\ClipNotify\settings.ini
-//   - 诊断日志：%LOCALAPPDATA%\ClipNotify\clipnotify.log
+// v4 新增：托盘右键菜单可选择"提示音"和"浮窗提示"两个独立开关，
+//         设置保存到 %LOCALAPPDATA%\ClipNotify\settings.ini，重启后仍生效。
 namespace ClipNotify
 {
     internal static class NativeMethods
@@ -65,7 +60,7 @@ namespace ClipNotify
     {
         public static bool Sound = true;
         public static bool Toast = true;
-        public static bool Precise = false; // 精确模式：只有真实按下 Ctrl 键（真正按 Ctrl+C）才提示
+        public static bool Precise = false; // 精确模式：只有按下 Ctrl 键（真正按 Ctrl+C）才提示
 
         private static string FilePath
         {
@@ -167,7 +162,7 @@ namespace ClipNotify
             _tray.Text = "ClipNotify 剪贴板提示工具";
             _tray.Visible = true;
 
-            // 右键菜单：提示音 / 浮窗提示 / 精确模式 三个独立开关
+            // 右键菜单：提示音 / 浮窗提示 两个独立开关
             ToolStripMenuItem mSound = new ToolStripMenuItem("提示音");
             mSound.CheckOnClick = true;
             mSound.Checked = Settings.Sound;
@@ -236,7 +231,7 @@ namespace ClipNotify
                 if (_hookHandle != IntPtr.Zero)
                     Log("键盘钩子安装成功");
                 else
-                    Log("键盘钩子安装失败 err=" + Marshal.GetLastWin32Error());
+                    Log("键盘钩子安装失败 err=" + System.Runtime.InteropServices.Marshal.GetLastWin32Error());
             }
             catch (Exception ex)
             {
@@ -252,7 +247,7 @@ namespace ClipNotify
                 try
                 {
                     NativeMethods.KBDLLHOOKSTRUCT kb =
-                        (NativeMethods.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(
+                        (NativeMethods.KBDLLHOOKSTRUCT)System.Runtime.InteropServices.Marshal.PtrToStructure(
                             lParam, typeof(NativeMethods.KBDLLHOOKSTRUCT));
                     // 低级钩子报告的 Ctrl 是左右具体键码（0xA2/0xA3），0x11 也兼容判断
                     if (kb.vkCode == NativeMethods.VK_CONTROL ||
@@ -263,6 +258,9 @@ namespace ClipNotify
                         uint msg = (uint)wParam;
                         bool down = (msg == NativeMethods.WM_KEYDOWN || msg == NativeMethods.WM_SYSKEYDOWN);
                         bool up = (msg == NativeMethods.WM_KEYUP || msg == NativeMethods.WM_SYSKEYUP);
+                        Log("  键盘事件 vk=0x" + kb.vkCode.ToString("X2") +
+                            " " + (down ? "按下" : (up ? "释放" : "其他")) +
+                            " 注入=" + injected);
                         if (!injected)
                         {
                             if (down) _userCtrlDown = true;
@@ -291,6 +289,8 @@ namespace ClipNotify
                 {
                     _lastSeq = cur;
                     bool ctrl = RealCtrlDown();
+                    Log("剪贴板变化 序号=" + cur + " 真实Ctrl=" + ctrl +
+                        " (钩子=" + (_hookHandle != IntPtr.Zero) + ") 精确模式=" + Settings.Precise);
 
                     // 精确模式：只认"按下 Ctrl 键"的复制（真正按了 Ctrl+C），
                     // 过滤微信/豆包划词等"选中即写入剪贴板"的自动行为
@@ -338,7 +338,7 @@ namespace ClipNotify
             {
                 if (Settings.Sound)
                 {
-                    // 单音清脆"叮"：E6，80ms
+                    // 单音清脆"叮"：E6，80ms（避免双音听起来像"响两下"）
                     NativeMethods.Beep(1318, 80);
                 }
                 if (Settings.Toast)

@@ -27,9 +27,9 @@ class MakeIcon
 
         using (var fs = File.Create(outPath))
         {
-            fs.WriteByte(0); fs.WriteByte(0);
-            fs.WriteByte(1); fs.WriteByte(0);
-            fs.WriteByte((byte)frames.Count); fs.WriteByte(0);
+            fs.WriteByte(0); fs.WriteByte(0);          // reserved
+            fs.WriteByte(1); fs.WriteByte(0);          // type: icon
+            fs.WriteByte((byte)frames.Count); fs.WriteByte(0); // count
 
             int offset = 6 + 16 * frames.Count;
             var pngs = new List<byte[]>();
@@ -43,10 +43,10 @@ class MakeIcon
                     bmp.Save(ms, ImageFormat.Png);
                     png = ms.ToArray();
                 }
-                fs.WriteByte(w); fs.WriteByte(h);
-                fs.WriteByte(0); fs.WriteByte(0);
-                fs.WriteByte(1); fs.WriteByte(0);
-                fs.WriteByte(32); fs.WriteByte(0);
+                fs.WriteByte(w); fs.WriteByte(h);      // size
+                fs.WriteByte(0); fs.WriteByte(0);      // palette
+                fs.WriteByte(1); fs.WriteByte(0);      // planes
+                fs.WriteByte(32); fs.WriteByte(0);     // bpp
                 int len = png.Length;
                 fs.WriteByte((byte)(len & 0xFF));
                 fs.WriteByte((byte)((len >> 8) & 0xFF));
@@ -65,21 +65,26 @@ class MakeIcon
         Console.WriteLine("ICO_OK " + outPath);
     }
 
+    // 以 64x64 为基准绘制（所有尺寸按比例缩放）
     static void DrawIcon(Graphics g, int s)
     {
         float k = s / 64f;
 
+        // 蓝色圆角背景
         var bg = new RectangleF(5f * k, 5f * k, 54f * k, 54f * k);
         using (var path = RoundedRect(bg, 13f * k))
         using (var brush = new SolidBrush(Color.FromArgb(255, 74, 124, 255)))
             g.FillPath(brush, path);
 
+        // 剪贴板板身（白）
         using (var brush = new SolidBrush(Color.White))
             g.FillRectangle(brush, new RectangleF(17f * k, 13f * k, 30f * k, 38f * k));
 
+        // 夹子
         using (var brush = new SolidBrush(Color.White))
             g.FillRectangle(brush, new RectangleF(27f * k, 8f * k, 10f * k, 7f * k));
 
+        // 绿色对勾
         using (var pen = new Pen(Color.FromArgb(255, 0, 168, 100), 5.5f * k))
         {
             pen.StartCap = LineCap.Round;
