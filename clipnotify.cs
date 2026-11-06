@@ -23,6 +23,11 @@ namespace ClipNotify
         // MCI：播放 WAV 并可控制音量（winmm.dll）
         [DllImport("winmm.dll")]
         internal static extern int mciSendString(string command, System.Text.StringBuilder ret, int retLen, IntPtr hwnd);
+        // waveOut 设备音量：0xFFFFFFFF = 左右声道均满幅；WAVE_MAPPER = -1
+        [DllImport("winmm.dll")]
+        internal static extern uint waveOutSetVolume(IntPtr uDeviceID, uint dwVolume);
+        [DllImport("winmm.dll")]
+        internal static extern uint waveOutGetVolume(IntPtr uDeviceID, out uint dwVolume);
 
         // 低级键盘钩子：用于区分"真实按键"与"应用模拟注入的按键"
         internal delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
@@ -322,6 +327,8 @@ namespace ClipNotify
                     {
                         _curType = type;
                         _curVolume = vol;
+                        // 强制把默认 wave 输出设备音量拉满（其他程序可能临时调低过）
+                        NativeMethods.waveOutSetVolume((IntPtr)(-1), 0xFFFFFFFF);
                     }
                 }
                 if (_curType < 0)
@@ -330,6 +337,8 @@ namespace ClipNotify
                     return;
                 }
 
+                // 每次播放前再确认一次设备音量（防止被其他程序抢占改小）
+                NativeMethods.waveOutSetVolume((IntPtr)(-1), 0xFFFFFFFF);
                 // 先停止上一次（快速连续复制时新音立即覆盖旧音）
                 NativeMethods.mciSendString("stop cnSnd", null, 0, IntPtr.Zero);
                 if (NativeMethods.mciSendString("play cnSnd from 0", null, 0, IntPtr.Zero) != 0)
