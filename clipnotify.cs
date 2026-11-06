@@ -65,8 +65,8 @@ namespace ClipNotify
         public static bool Toast = true;
         public static bool Precise = false; // 精确模式：只有按下 Ctrl 键（真正按 Ctrl+C）才提示
         public static bool Log = true;      // 日志记录开关：关闭后不再写 clipnotify.log
-        public static int SoundType = 0;    // 提示音音色：0=清脆叮 1=柔和叮 2=叮咚两声
-        public static int SoundVolume = 60; // 提示音音量百分比：0-100
+        public static int SoundType = 0;    // 提示音音色：0..7 见菜单
+        public static int SoundVolume = 6;  // 提示音音量：1-10（默认 6）
 
         private static string FilePath
         {
@@ -101,8 +101,11 @@ namespace ClipNotify
                     }
                 }
                 // 防御：数值越界时回落到默认值
-                if (SoundType < 0 || SoundType > 2) SoundType = 0;
-                if (SoundVolume < 0 || SoundVolume > 100) SoundVolume = 60;
+                if (SoundType < 0 || SoundType > 7) SoundType = 0;
+                // 旧版本 volume 是 0-100（30/60/100 三档），迁移到 1-10
+                if (SoundVolume > 10) { SoundVolume = (int)Math.Round(SoundVolume / 10.0); }
+                if (SoundVolume < 1) SoundVolume = 1;
+                if (SoundVolume > 10) SoundVolume = 10;
             }
             catch { }
         }
@@ -124,13 +127,16 @@ namespace ClipNotify
         }
     }
 
-    // 提示音：程序内置生成 3 种 WAV 音色（无需附带音频文件），用 MCI 播放并可控音量
+    // 提示音：程序内置生成 8 种 WAV 音色（无需附带音频文件），用 MCI 播放并可控音量
     static class SoundFiles
     {
-        public const int TYPE_COUNT = 3;
-        // 音量档位：波形幅度按档位缩放，生成不同文件（MCI 的 setaudio 对 WAV 无效，用幅度才是可靠音量控制）
-        public static readonly int[] Volumes = { 30, 60, 100 };
-        private static readonly string[] Bases = { "ding_clear", "ding_soft", "ding_dong" };
+        public const int TYPE_COUNT = 8;
+        // 音量档位：1-10，波形幅度按档位缩放（MCI 的 setaudio 对 WAV 无效，用幅度才是可靠音量控制）
+        public static readonly int[] Volumes = { 1,2,3,4,5,6,7,8,9,10 };
+        private static readonly string[] Bases = {
+            "ding_clear", "ding_soft", "ding_dong",   // 0..2 原 3 种
+            "tri_tone", "glass", "hero", "chime", "marimba"  // 3..7 经典风格
+        };
         private static string _dir;
         private static int _curType = -1;   // 当前已打开的 MCI 别名对应音色，-1 表示未打开
         private static int _curVolume = -1; // 当前已打开的 MCI 别名对应音量档位
@@ -155,21 +161,24 @@ namespace ClipNotify
             return Path.Combine(DirPath, Bases[type] + "_v" + volume + ".wav");
         }
 
-        // 启动时确保 3 音色 × 3 音量 共 9 个提示音文件存在（缺失或损坏则重新生成）
+        // 启动时只确保"当前选中音色+当前音量"的文件存在（其他按需生成）
         public static void EnsureFiles()
+        {
+            EnsureFor(Settings.SoundType, Settings.SoundVolume);
+        }
+
+        // 确保指定音色+音量的文件存在，不存在才生成
+        public static void EnsureFor(int type, int volume)
         {
             try
             {
                 Directory.CreateDirectory(DirPath);
-                for (int i = 0; i < TYPE_COUNT; i++)
-                {
-                    for (int j = 0; j < Volumes.Length; j++)
-                    {
-                        string p = FilePath(i, Volumes[j]);
-                        if (!File.Exists(p) || new FileInfo(p).Length < 1000)
-                            Generate(i, Volumes[j], p);
-                    }
-                }
+                if (type < 0 || type >= TYPE_COUNT) type = 0;
+                if (volume < 1) volume = 1;
+                if (volume > 10) volume = 10;
+                string p = FilePath(type, volume);
+                if (!File.Exists(p) || new FileInfo(p).Length < 1000)
+                    Generate(type, volume, p);
             }
             catch { }
         }
@@ -178,12 +187,18 @@ namespace ClipNotify
         private static void Generate(int type, int volume, string path)
         {
             const int rate = 44100;
+            // 各音色总时长
             double total = 0.10;
             if (type == 0) total = 0.10;      // 清脆叮：高频短促
             else if (type == 1) total = 0.16; // 柔和叮：中频舒缓
-            else total = 0.26;                // 叮咚两声：先叮后咚
+            else if (type == 2) total = 0.26; // 叮咚两声：先叮后咚
+            else if (type == 3) total = 0.36; // Tri-tone：三音上行
+            else if (type == 4) total = 0.09;  // Glass：玻璃短音
+            else if (type == 5) total = 0.32;  // Hero：双音升调
+            else if (type == 6) total = 0.40;  // Chime：风铃长尾
+            else total = 0.28;                 // Marimba：短琶音
 
-            double amp = volume / 100.0; // 音量：按档位缩放波形幅度（真实可听感差异）
+            double amp = volume / 10.0; // 音量 1-10 → 0.1..1.0
 
             int n = (int)(rate * total);
             short[] data = new short[n];
@@ -199,7 +214,7 @@ namespace ClipNotify
                 {
                     v = Math.Sin(2 * Math.PI * 880 * t) * Math.Exp(-t / 0.060) * amp * 0.9;
                 }
-                else
+                else if (type == 2)
                 {
                     if (t < 0.09)
                         v = Math.Sin(2 * Math.PI * 1318 * t) * Math.Exp(-t / 0.028) * amp * 0.9;
@@ -209,6 +224,40 @@ namespace ClipNotify
                         v = Math.Sin(2 * Math.PI * 990 * t2) * Math.Exp(-t2 / 0.045) * amp * 0.9;
                     }
                     else v = 0;
+                }
+                else if (type == 3) // Tri-tone：C-E-G 上行（iPhone 经典短信音风格）
+                {
+                    double f;
+                    if (t < 0.12) f = 1318;
+                    else if (t < 0.24) f = 1661;
+                    else f = 1975;
+                    v = Math.Sin(2 * Math.PI * f * t) * Math.Exp(-t / 0.04) * amp * 0.85;
+                }
+                else if (type == 4) // Glass：高频玻璃单音（macOS 风格）
+                {
+                    v = Math.Sin(2 * Math.PI * 2093 * t) * Math.Exp(-t / 0.018) * amp * 0.85;
+                }
+                else if (type == 5) // Hero：双音升调（macOS iChat 风格）
+                {
+                    double f; double t0;
+                    if (t < 0.14) { f = 1047; t0 = t; }
+                    else { f = 1568; t0 = t - 0.16; }
+                    v = Math.Sin(2 * Math.PI * f * t0) * Math.Exp(-t0 / 0.05) * amp * 0.85;
+                }
+                else if (type == 6) // Chime：风铃两音（Windows XP 风格）
+                {
+                    double f; double t0;
+                    if (t < 0.16) { f = 880; t0 = t; }
+                    else { f = 1175; t0 = t - 0.18; }
+                    v = Math.Sin(2 * Math.PI * f * t0) * Math.Exp(-t0 / 0.08) * amp * 0.8;
+                }
+                else // Marimba：快速三音琶音
+                {
+                    double f; double t0;
+                    if (t < 0.08) { f = 1568; t0 = t; }
+                    else if (t < 0.16) { f = 1975; t0 = t - 0.08; }
+                    else { f = 2637; t0 = t - 0.16; }
+                    v = Math.Sin(2 * Math.PI * f * t0) * Math.Exp(-t0 / 0.03) * amp * 0.85;
                 }
                 // 首尾 2ms 淡入淡出，避免爆音
                 double edge = Math.Min(t, total - t);
@@ -255,10 +304,11 @@ namespace ClipNotify
             try
             {
                 if (type < 0 || type >= TYPE_COUNT) type = 0;
-                int vol = NearestVolume(volume); // 归一化到 30/60/100 档位
+                int vol = volume;
+                if (vol < 1) vol = 1; if (vol > 10) vol = 10;
 
                 string p = FilePath(type, vol);
-                if (!File.Exists(p)) EnsureFiles();
+                if (!File.Exists(p)) EnsureFor(type, vol);
 
                 // 音色或音量变化时重新打开对应文件
                 if (_curType != type || _curVolume != vol)
@@ -345,7 +395,7 @@ namespace ClipNotify
             Application.SetCompatibleTextRenderingDefault(false);
 
             Settings.Load();
-            SoundFiles.EnsureFiles(); // 确保 3 个提示音文件就绪
+            SoundFiles.EnsureFiles(); // 确保当前音色+音量的提示音文件就绪
 
             _tray = new NotifyIcon();
             // 使用 exe 自带的程序图标（编译时通过 /win32icon 嵌入）
@@ -368,7 +418,7 @@ namespace ClipNotify
 
             // 提示音音色（三选一）
             ToolStripMenuItem mSoundType = new ToolStripMenuItem("提示音音色");
-            string[] typeNames = { "清脆叮", "柔和叮", "叮咚两声" };
+            string[] typeNames = { "清脆叮", "柔和叮", "叮咚两声", "三音上行", "玻璃音", "双音升调", "风铃", "马林巴琶音" };
             ToolStripMenuItem[] typeItems = new ToolStripMenuItem[typeNames.Length];
             for (int i = 0; i < typeNames.Length; i++)
             {
@@ -385,20 +435,20 @@ namespace ClipNotify
                 mSoundType.DropDownItems.Add(typeItems[i]);
             }
 
-            // 提示音音量（三档）
+            // 提示音音量（1-10）
             ToolStripMenuItem mVolume = new ToolStripMenuItem("提示音音量");
-            string[] volNames = { "小", "中", "大" };
-            int[] volVals = { 30, 60, 100 };
-            ToolStripMenuItem[] volItems = new ToolStripMenuItem[volNames.Length];
-            for (int i = 0; i < volNames.Length; i++)
+            int[] volVals = { 1,2,3,4,5,6,7,8,9,10 };
+            ToolStripMenuItem[] volItems = new ToolStripMenuItem[volVals.Length];
+            for (int i = 0; i < volVals.Length; i++)
             {
                 int idx = i;
-                volItems[i] = new ToolStripMenuItem(volNames[i]);
-                volItems[i].Checked = (Settings.SoundVolume == volVals[idx]);
+                int vval = volVals[i];
+                volItems[i] = new ToolStripMenuItem("音量 " + vval);
+                volItems[i].Checked = (Settings.SoundVolume == vval);
                 volItems[i].Click += (s, e) =>
                 {
-                    Settings.SoundVolume = volVals[idx];
-                    for (int j = 0; j < volItems.Length; j++) volItems[j].Checked = (j == idx);
+                    Settings.SoundVolume = vval;
+                    for (int j = 0; j < volItems.Length; j++) volItems[j].Checked = (volVals[j] == Settings.SoundVolume);
                     Settings.Save();
                     SoundFiles.Play(Settings.SoundType, Settings.SoundVolume); // 选中即试听
                 };
